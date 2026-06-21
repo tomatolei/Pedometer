@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:description="@string/widget_steps_wide_name"
+    android:initialLayout="@layout/widget_steps_wide"
+    android:minHeight="72dp"
+    android:minWidth="288dp"
+    android:previewLayout="@layout/widget_steps_wide"
+    android:resizeMode="horizontal"
+    android:targetCellHeight="1"
+    android:targetCellWidth="4"
+    android:updatePeriodMillis="1800000"
+    android:widgetCategory="home_screen" />

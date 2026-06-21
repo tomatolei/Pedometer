@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/widgetRoot"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@drawable/widget_bg"
+    android:gravity="center_vertical"
+    android:orientation="horizontal">
+
+    <ImageView
+        android:layout_width="72dp"
+        android:layout_height="72dp"
+        android:contentDescription="@null"
+        android:src="@drawable/ic_widget_heart" />
+
+    <LinearLayout
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="18dp"
+        android:layout_weight="1"
+        android:orientation="vertical">
+
+        <TextView android:id="@+id/widgetActivitySteps" style="@style/WidgetMetricTextLarge" />
+        <TextView android:id="@+id/widgetActivityDistance" style="@style/WidgetMetricTextLarge" />
+        <TextView android:id="@+id/widgetActivityMinutes" style="@style/WidgetMetricTextLarge" />
+        <TextView android:id="@+id/widgetActivityCalories" style="@style/WidgetMetricTextLarge" />
+    </LinearLayout>
+</LinearLayout>

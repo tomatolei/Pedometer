@@ -1,0 +1,12 @@
+<resources>
+    <string name="app_name">轻步 Pedometer</string>
+    <string name="widget_compact_name">轻步今日步数</string>
+    <string name="widget_progress_name">轻步进度</string>
+    <string name="widget_steps_square_name">轻步步数 2x2</string>
+    <string name="widget_steps_wide_name">轻步步数 4x1</string>
+    <string name="widget_steps_week_name">轻步步数 4x2</string>
+    <string name="widget_activity_compact_name">轻步每日活动 2x1</string>
+    <string name="widget_activity_square_name">轻步每日活动 2x2</string>
+    <string name="widget_activity_wide_name">轻步每日活动 4x1</string>
+    <string name="widget_activity_week_name">轻步每日活动 4x2</string>
+</resources>

@@ -1,0 +1,7 @@
+<resources>
+    <color name="brand_green">#14B978</color>
+    <color name="brand_blue">#1FA2DD</color>
+    <color name="brand_orange">#F5A40B</color>
+    <color name="widget_text_dark">#0D211A</color>
+    <color name="widget_surface">#F7FBF9</color>
+</resources>
