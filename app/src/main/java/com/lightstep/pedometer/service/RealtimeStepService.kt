@@ -28,6 +28,8 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import java.text.NumberFormat
+import java.util.Locale
 
 class RealtimeStepService : Service(), SensorEventListener {
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -52,7 +54,13 @@ class RealtimeStepService : Service(), SensorEventListener {
             return START_NOT_STICKY
         }
 
-        startInForeground(0)
+        startInForeground(0, 0.0)
+        serviceScope.launch {
+            repository.getToday()?.let { today ->
+                lastNotificationSteps = today.dailySteps
+                startInForeground(today.dailySteps, today.distanceMeters)
+            }
+        }
         stepCounterSensor?.let(::registerStepSensor)
         return START_STICKY
     }
@@ -69,11 +77,11 @@ class RealtimeStepService : Service(), SensorEventListener {
         val totalSteps = event.values.firstOrNull()?.toLong() ?: return
         serviceScope.launch {
             val daily = repository.syncSensorTotal(totalSteps, SystemBoot.currentBootId())
-            publishSteps(daily.dailySteps)
+            publishSteps(daily.dailySteps, daily.distanceMeters)
         }
     }
 
-    private suspend fun publishSteps(steps: Long) {
+    private suspend fun publishSteps(steps: Long, distanceMeters: Double) {
         val now = SystemClock.elapsedRealtime()
         val shouldUpdateWidget = lastWidgetUpdateAt == 0L ||
             now - lastWidgetUpdateAt >= WIDGET_UPDATE_MIN_INTERVAL_MS ||
@@ -85,7 +93,7 @@ class RealtimeStepService : Service(), SensorEventListener {
         }
         if (steps != lastNotificationSteps) {
             lastNotificationSteps = steps
-            startInForeground(steps)
+            startInForeground(steps, distanceMeters)
         }
     }
 
@@ -103,8 +111,8 @@ class RealtimeStepService : Service(), SensorEventListener {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
-    private fun startInForeground(steps: Long) {
-        val notification = buildNotification(steps)
+    private fun startInForeground(steps: Long, distanceMeters: Double) {
+        val notification = buildNotification(steps, distanceMeters)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_HEALTH)
         } else {
@@ -112,7 +120,7 @@ class RealtimeStepService : Service(), SensorEventListener {
         }
     }
 
-    private fun buildNotification(steps: Long): Notification {
+    private fun buildNotification(steps: Long, distanceMeters: Double): Notification {
         val openIntent = PendingIntent.getActivity(
             this,
             1,
@@ -125,7 +133,11 @@ class RealtimeStepService : Service(), SensorEventListener {
             Intent(this, RealtimeStepService::class.java).setAction(ACTION_STOP),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
-        val content = if (steps > 0) "今日 $steps 步" else "正在监听手机计步传感器"
+        val content = if (steps > 0) {
+            "今日 ${formatSteps(steps)} 步 · ${formatDistance(distanceMeters)}"
+        } else {
+            "正在监听手机计步传感器"
+        }
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_launcher_foreground)
             .setContentTitle("轻步实时计步")
@@ -136,6 +148,12 @@ class RealtimeStepService : Service(), SensorEventListener {
             .addAction(0, "停止", stopIntent)
             .build()
     }
+
+    private fun formatSteps(steps: Long): String =
+        NumberFormat.getIntegerInstance(Locale.getDefault()).format(steps)
+
+    private fun formatDistance(distanceMeters: Double): String =
+        String.format(Locale.getDefault(), "%.2f km", distanceMeters / 1000.0)
 
     private fun createChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {

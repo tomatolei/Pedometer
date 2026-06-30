@@ -30,6 +30,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import java.text.NumberFormat
+import java.util.Locale
 
 class WidgetSyncService : Service(), SensorEventListener {
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -38,6 +40,7 @@ class WidgetSyncService : Service(), SensorEventListener {
     private var stepCounterSensor: Sensor? = null
     private var lastWidgetUpdateAt: Long = 0
     private var lastWidgetUpdateSteps: Long = -1
+    private var lastNotificationSteps: Long = -1
 
     override fun onCreate() {
         super.onCreate()
@@ -53,7 +56,13 @@ class WidgetSyncService : Service(), SensorEventListener {
             return START_NOT_STICKY
         }
 
-        startInForeground()
+        startInForeground(0, 0.0)
+        serviceScope.launch {
+            repository.getToday()?.let { today ->
+                lastNotificationSteps = today.dailySteps
+                startInForeground(today.dailySteps, today.distanceMeters)
+            }
+        }
         stepCounterSensor?.let { sensor ->
             sensorManager.registerListener(this, sensor, SensorManager.SENSOR_DELAY_NORMAL, 0)
         } ?: stopSelf()
@@ -73,6 +82,10 @@ class WidgetSyncService : Service(), SensorEventListener {
                 lastWidgetUpdateAt = now
                 lastWidgetUpdateSteps = daily.dailySteps
             }
+            if (daily.dailySteps != lastNotificationSteps) {
+                lastNotificationSteps = daily.dailySteps
+                startInForeground(daily.dailySteps, daily.distanceMeters)
+            }
         }
     }
 
@@ -86,8 +99,8 @@ class WidgetSyncService : Service(), SensorEventListener {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
-    private fun startInForeground() {
-        val notification = buildNotification()
+    private fun startInForeground(steps: Long, distanceMeters: Double) {
+        val notification = buildNotification(steps, distanceMeters)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_HEALTH)
         } else {
@@ -95,7 +108,7 @@ class WidgetSyncService : Service(), SensorEventListener {
         }
     }
 
-    private fun buildNotification(): Notification {
+    private fun buildNotification(steps: Long, distanceMeters: Double): Notification {
         val openIntent = PendingIntent.getActivity(
             this,
             21,
@@ -111,13 +124,25 @@ class WidgetSyncService : Service(), SensorEventListener {
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_launcher_foreground)
             .setContentTitle("轻步小组件同步")
-            .setContentText("普通模式下保持桌面步数更新")
+            .setContentText(
+                if (steps > 0) {
+                    "今日 ${formatSteps(steps)} 步 · ${formatDistance(distanceMeters)}"
+                } else {
+                    "普通模式下保持桌面步数更新"
+                }
+            )
             .setContentIntent(openIntent)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .addAction(0, "停止", stopIntent)
             .build()
     }
+
+    private fun formatSteps(steps: Long): String =
+        NumberFormat.getIntegerInstance(Locale.getDefault()).format(steps)
+
+    private fun formatDistance(distanceMeters: Double): String =
+        String.format(Locale.getDefault(), "%.2f km", distanceMeters / 1000.0)
 
     private fun createChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {

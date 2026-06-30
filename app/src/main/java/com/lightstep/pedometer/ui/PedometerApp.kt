@@ -1,6 +1,16 @@
 package com.lightstep.pedometer.ui
 
+import android.content.Context
+import android.content.Intent
+import android.app.DatePickerDialog
+import android.graphics.BitmapFactory
+import android.graphics.ImageDecoder
+import android.net.Uri
+import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -11,6 +21,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
@@ -25,12 +36,14 @@ import androidx.compose.material.icons.outlined.BarChart
 import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.outlined.DarkMode
 import androidx.compose.material.icons.outlined.DirectionsWalk
+import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Flag
 import androidx.compose.material.icons.outlined.LightMode
 import androidx.compose.material.icons.outlined.LocalFireDepartment
 import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material.icons.outlined.Pause
 import androidx.compose.material.icons.outlined.Person
+import androidx.compose.material.icons.outlined.PhotoCamera
 import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Settings
@@ -46,11 +59,13 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Divider
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SnackbarHost
@@ -64,6 +79,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -71,16 +87,24 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.lightstep.pedometer.PedometerUiState
 import com.lightstep.pedometer.data.DailyStepsEntity
 import com.lightstep.pedometer.data.SensorSampleEntity
+import com.lightstep.pedometer.data.UserSettingsEntity
+import com.lightstep.pedometer.domain.StepMetrics
 import com.lightstep.pedometer.ui.theme.StepBlue
 import com.lightstep.pedometer.ui.theme.StepGreen
 import com.lightstep.pedometer.ui.theme.StepMuted
@@ -90,6 +114,8 @@ import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
 import java.util.Locale
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlin.math.max
 import kotlin.math.roundToInt
 
@@ -99,6 +125,8 @@ fun PedometerApp(
     onRequestPermission: () -> Unit,
     onRefresh: () -> Unit,
     onSetGoal: (Int) -> Unit,
+    onUpdateProfile: (String, String?, Int, Int, String, String, String, Int) -> Unit,
+    onCalibrateStride: (Double) -> Unit,
     onSetTheme: (String) -> Unit,
     onToggleRealtime: (Boolean) -> Unit,
     onOpenBatteryOptimization: () -> Unit,
@@ -107,6 +135,7 @@ fun PedometerApp(
 ) {
     val snackbarHostState = remember { SnackbarHostState() }
     var selectedTab by rememberSaveable { mutableStateOf(MainTab.Today) }
+    var profileEditorOpen by rememberSaveable { mutableStateOf(false) }
 
     LaunchedEffect(state.message) {
         val text = state.message
@@ -119,7 +148,7 @@ fun PedometerApp(
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
         bottomBar = {
-            if (state.permissionGranted && state.sensorAvailable) {
+            if (state.permissionGranted && state.sensorAvailable && !profileEditorOpen) {
                 BottomTabs(selectedTab) { selectedTab = it }
             }
         }
@@ -133,12 +162,19 @@ fun PedometerApp(
             when {
                 !state.permissionGranted -> PermissionScreen(onRequestPermission)
                 !state.sensorAvailable -> NoSensorScreen(onRefresh)
+                profileEditorOpen -> ProfileEditScreen(
+                    state = state,
+                    onDone = { profileEditorOpen = false },
+                    onUpdateProfile = onUpdateProfile,
+                    onCalibrateStride = onCalibrateStride
+                )
                 selectedTab == MainTab.Today -> TodayScreen(state, onRefresh, onToggleRealtime)
                 selectedTab == MainTab.Stats -> StatsScreen(state)
                 selectedTab == MainTab.Widget -> WidgetScreen(state, onRefresh)
                 selectedTab == MainTab.Me -> SettingsScreen(
                     state = state,
                     onSetGoal = onSetGoal,
+                    onEditProfile = { profileEditorOpen = true },
                     onSetTheme = onSetTheme,
                     onToggleRealtime = onToggleRealtime,
                     onOpenBatteryOptimization = onOpenBatteryOptimization,
@@ -317,7 +353,7 @@ private fun StatsScreen(state: PedometerUiState) {
     val week = buildWeek(state.week, state.settings.dailyGoalSteps)
     val month = buildMonth(state.month, state.settings.dailyGoalSteps)
 
-    ScreenColumn {
+    ScreenColumn(spacing = 12.dp, verticalPadding = 14.dp) {
         Header(
             title = "统计",
             subtitle = when (period) {
@@ -332,24 +368,23 @@ private fun StatsScreen(state: PedometerUiState) {
             StatsPeriod.Week -> WeekStatsContent(week)
             StatsPeriod.Month -> MonthStatsContent(month)
         }
-        NoticeCard("第一版只统计手机传感器步数，手机没带在身上时不会记录人体实际步数。")
+        NoticeCard("第一版只统计手机传感器步数，手机没带在身上时不会记录人体实际步数。", compact = true)
     }
 }
 
 @Composable
 private fun DayStatsContent(state: PedometerUiState) {
     val today = state.today
-    ElevatedCard(shape = RoundedCornerShape(8.dp), modifier = Modifier.fillMaxWidth()) {
-        Column(modifier = Modifier.padding(18.dp)) {
-            Text("今日时段", fontWeight = FontWeight.SemiBold)
-            Text("总步数 ${number(today?.dailySteps ?: 0)} · 更新 ${timeLabel(today?.updatedAt)}", color = StepMuted, fontSize = 12.sp)
-            HourChart(samples = state.samples, totalSteps = today?.dailySteps ?: 0, modifier = Modifier.padding(top = 14.dp))
-        }
+    StatChartCard(
+        title = "今日时段",
+        subtitle = "总步数 ${number(today?.dailySteps ?: 0)} · 更新 ${timeLabel(today?.updatedAt)}"
+    ) {
+        HourChart(samples = state.samples, totalSteps = today?.dailySteps ?: 0, height = 138.dp)
     }
     Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
-        SummaryCard("距离", "${oneDecimal((today?.distanceMeters ?: 0.0) / 1000.0)} km", "估算", StepBlue, Modifier.weight(1f))
-        SummaryCard("热量", "${(today?.calories ?: 0.0).roundToInt()} kcal", "估算", StepOrange, Modifier.weight(1f))
-        SummaryCard("活跃", "${today?.activeMinutes ?: 0} 分钟", "今日", StepGreen, Modifier.weight(1f))
+        SummaryCard("距离", "${oneDecimal((today?.distanceMeters ?: 0.0) / 1000.0)} km", "估算", StepBlue, Modifier.weight(1f), compact = true)
+        SummaryCard("热量", "${(today?.calories ?: 0.0).roundToInt()} kcal", "估算", StepOrange, Modifier.weight(1f), compact = true)
+        SummaryCard("活跃", "${today?.activeMinutes ?: 0} 分钟", "今日", StepGreen, Modifier.weight(1f), compact = true)
     }
 }
 
@@ -359,17 +394,21 @@ private fun WeekStatsContent(week: List<WeekDay>) {
     val average = if (week.isNotEmpty()) total / week.size else 0
     val best = week.maxOfOrNull { it.steps } ?: 0
     val reached = week.count { it.steps >= it.goal }
-    ElevatedCard(shape = RoundedCornerShape(8.dp), modifier = Modifier.fillMaxWidth()) {
-        Column(modifier = Modifier.padding(18.dp)) {
-            Text("本周趋势", fontWeight = FontWeight.SemiBold)
-            Text("总步数 ${number(total)} · 平均 ${number(average)}", color = StepMuted, fontSize = 12.sp)
-            WeekChart(week, Modifier.padding(top = 18.dp))
-        }
+    StatChartCard(
+        title = "本周趋势",
+        subtitle = "总步数 ${number(total)} · 平均 ${number(average)}"
+    ) {
+        LabeledBarChart(
+            bars = week.map { it.steps.toFloat() },
+            labels = week.map { it.label },
+            highlightIndex = week.lastIndex,
+            modifier = Modifier.height(190.dp)
+        )
     }
     Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
-        SummaryCard("达标天数", "$reached 天", "手机随身统计", StepGreen, Modifier.weight(1f))
-        SummaryCard("最高纪录", number(best), "近 7 天", StepOrange, Modifier.weight(1f))
-        SummaryCard("连续记录", "${week.count { it.steps > 0 }} 天", "近 7 天", StepBlue, Modifier.weight(1f))
+        SummaryCard("达标天数", "$reached 天", "手机随身统计", StepGreen, Modifier.weight(1f), compact = true)
+        SummaryCard("最高纪录", number(best), "近 7 天", StepOrange, Modifier.weight(1f), compact = true)
+        SummaryCard("连续记录", "${week.count { it.steps > 0 }} 天", "近 7 天", StepBlue, Modifier.weight(1f), compact = true)
     }
 }
 
@@ -379,28 +418,22 @@ private fun MonthStatsContent(month: List<MonthDay>) {
     val average = if (month.isNotEmpty()) total / month.size else 0
     val best = month.maxOfOrNull { it.steps } ?: 0
     val reached = month.count { it.steps >= it.goal }
-    ElevatedCard(shape = RoundedCornerShape(8.dp), modifier = Modifier.fillMaxWidth()) {
-        Column(modifier = Modifier.padding(18.dp)) {
-            Text("30 天趋势", fontWeight = FontWeight.SemiBold)
-            Text("总步数 ${number(total)} · 平均 ${number(average)}", color = StepMuted, fontSize = 12.sp)
-            BarRow(
-                bars = month.map { it.steps.toFloat() },
-                highlightLast = true,
-                modifier = Modifier
-                    .padding(top = 18.dp)
-                    .height(170.dp)
-            )
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                month.filterIndexed { index, _ -> index % 5 == 0 || index == month.lastIndex }.forEach {
-                    Text(it.label, color = StepMuted, fontSize = 10.sp)
-                }
-            }
-        }
+    StatChartCard(
+        title = "30 天趋势",
+        subtitle = "总步数 ${number(total)} · 平均 ${number(average)}"
+    ) {
+        LabeledBarChart(
+            bars = month.map { it.steps.toFloat() },
+            labels = month.mapIndexed { index, day -> if (index % 5 == 0 || index == month.lastIndex) day.label else "" },
+            highlightIndex = month.lastIndex,
+            modifier = Modifier.height(190.dp),
+            labelEveryBar = false
+        )
     }
     Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
-        SummaryCard("达标天数", "$reached 天", "最近 30 天", StepGreen, Modifier.weight(1f))
-        SummaryCard("最高纪录", number(best), "最近 30 天", StepOrange, Modifier.weight(1f))
-        SummaryCard("平均步数", number(average), "每日", StepBlue, Modifier.weight(1f))
+        SummaryCard("达标天数", "$reached 天", "最近 30 天", StepGreen, Modifier.weight(1f), compact = true)
+        SummaryCard("最高纪录", number(best), "最近 30 天", StepOrange, Modifier.weight(1f), compact = true)
+        SummaryCard("平均步数", number(average), "每日", StepBlue, Modifier.weight(1f), compact = true)
     }
 }
 
@@ -410,22 +443,34 @@ private fun WidgetScreen(state: PedometerUiState, onRefresh: () -> Unit) {
     val goal = state.today?.goalSteps ?: state.settings.dailyGoalSteps
     val percent = ((steps * 100.0) / goal.coerceAtLeast(1)).roundToInt()
 
-    ScreenColumn {
+    ScreenColumn(spacing = 7.dp, verticalPadding = 10.dp) {
         Header(title = "小组件", subtitle = "桌面快速查看步数")
-        WidgetPreviewSmall(steps)
-        WidgetPreviewProgress(steps, percent)
-        WidgetPreviewSquare(steps, goal, percent)
-        WidgetPreviewWide(steps, goal, percent)
-        WidgetPreviewWeek(buildWeek(state.week, goal))
-        ActivityWidgetPreview(
-            steps = steps,
-            distanceKm = (state.today?.distanceMeters ?: 0.0) / 1000.0,
-            minutes = state.today?.activeMinutes ?: 0,
-            calories = (state.today?.calories ?: 0.0).roundToInt()
-        )
+        CompactWidgetRow(iconLabel = "1×1", title = "极简步数", subtitle = "今日") {
+            CompactWidgetSmallPreview(steps)
+        }
+        CompactWidgetRow(iconLabel = "2×1", title = "步数进度", subtitle = "横向进度") {
+            CompactWidgetProgressPreview(steps, percent)
+        }
+        CompactWidgetRow(iconLabel = "2×2", title = "步数卡片", subtitle = "步数 / 目标") {
+            CompactWidgetSquarePreview(steps, percent)
+        }
+        CompactWidgetRow(iconLabel = "4×1", title = "步数横条", subtitle = "桌面横幅") {
+            CompactWidgetWidePreview(steps, goal, percent)
+        }
+        CompactWidgetRow(iconLabel = "4×2", title = "周趋势", subtitle = "近 7 天") {
+            CompactWidgetWeekPreview(buildWeek(state.week, goal))
+        }
+        CompactWidgetRow(iconLabel = "4×2", title = "活动总览", subtitle = "数据汇总", tall = true) {
+            CompactActivityPreview(
+                steps = steps,
+                distanceKm = (state.today?.distanceMeters ?: 0.0) / 1000.0,
+                minutes = state.today?.activeMinutes ?: 0,
+                calories = (state.today?.calories ?: 0.0).roundToInt()
+            )
+        }
         Button(
             onClick = onRefresh,
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier.fillMaxWidth().height(52.dp),
             colors = ButtonDefaults.buttonColors(containerColor = StepGreen)
         ) {
             Icon(Icons.Outlined.Refresh, null, modifier = Modifier.size(18.dp))
@@ -439,35 +484,54 @@ private fun WidgetScreen(state: PedometerUiState, onRefresh: () -> Unit) {
 private fun SettingsScreen(
     state: PedometerUiState,
     onSetGoal: (Int) -> Unit,
+    onEditProfile: () -> Unit,
     onSetTheme: (String) -> Unit,
     onToggleRealtime: (Boolean) -> Unit,
     onOpenBatteryOptimization: () -> Unit,
     onOpenBackgroundActivity: () -> Unit
 ) {
     var goalValue by remember(state.settings.dailyGoalSteps) { mutableFloatStateOf(state.settings.dailyGoalSteps.toFloat()) }
+    val settings = state.settings
+    val effectiveStride = StepMetrics.effectiveStrideCm(settings)
+    val todayDistanceKm = (state.today?.distanceMeters ?: 0.0) / 1000.0
 
     ScreenColumn {
         Header(title = "我的", subtitle = "本地数据 · 无账号")
         ElevatedCard(shape = RoundedCornerShape(8.dp), modifier = Modifier.fillMaxWidth()) {
-            Row(
-                modifier = Modifier.padding(16.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Box(
-                    modifier = Modifier
-                        .size(52.dp)
-                        .clip(CircleShape)
-                        .background(StepGreen),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(Icons.Outlined.DirectionsWalk, null, tint = Color.White)
+            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        modifier = Modifier
+                            .size(66.dp)
+                            .clip(CircleShape)
+                            .background(StepGreen.copy(alpha = 0.14f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        AvatarImage(settings.avatarUri, size = 66.dp, cornerRadius = 33.dp)
+                    }
+                    Column(modifier = Modifier.padding(start = 14.dp).weight(1f)) {
+                        Text(settings.displayName, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                        Text(
+                            "${genderLabel(settings.gender)} · ${settings.heightCm} cm · ${settings.weightKg} kg · ${settings.age} 岁",
+                            color = StepMuted,
+                            fontSize = 12.sp
+                        )
+                        Text(
+                            "步幅 $effectiveStride cm · ${strideModeLabel(settings.strideMode)}",
+                            color = StepMuted,
+                            fontSize = 12.sp
+                        )
+                    }
+                    TextButton(onClick = onEditProfile) {
+                        Text("编辑")
+                    }
                 }
-                Column(modifier = Modifier.padding(start = 12.dp)) {
-                    Text("轻步 Pedometer", fontWeight = FontWeight.Bold)
-                    Text("数据保存在本机 · 不上传", color = StepMuted, fontSize = 12.sp)
+                Divider(color = MaterialTheme.colorScheme.background)
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
+                    ProfileSummaryMetric("今日", "${number(state.today?.dailySteps ?: 0)} 步", Modifier.weight(1f))
+                    ProfileSummaryMetric("距离", "${twoDecimal(todayDistanceKm)} km", Modifier.weight(1f))
+                    ProfileSummaryMetric("状态", if (state.sensorAvailable) "正常" else "异常", Modifier.weight(1f))
                 }
-                Spacer(Modifier.weight(1f))
-                StatusPill(if (state.sensorAvailable) "正常" else "异常")
             }
         }
 
@@ -506,7 +570,593 @@ private fun SettingsScreen(
                 ThemeButton("深色", Icons.Outlined.DarkMode, state.settings.themeMode == "dark", Modifier.weight(1f)) { onSetTheme("dark") }
             }
         }
+
+        SettingsSection("关于") {
+            Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                AboutRow("作者", "累累")
+                AboutRow("邮箱", "823921@qq.com")
+                AboutRow("GitHub", "tomatolei/Pedometer")
+                AboutRow("主页", "tomatolei.cn")
+            }
+        }
     }
+}
+
+@Composable
+private fun ProfileEditScreen(
+    state: PedometerUiState,
+    onDone: () -> Unit,
+    onUpdateProfile: (String, String?, Int, Int, String, String, String, Int) -> Unit,
+    onCalibrateStride: (Double) -> Unit
+) {
+    val context = LocalContext.current
+    var displayName by remember(state.settings.displayName) { mutableStateOf(state.settings.displayName) }
+    var avatarUri by remember(state.settings.avatarUri) { mutableStateOf(state.settings.avatarUri) }
+    val avatarPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) {
+            runCatching {
+                context.contentResolver.takePersistableUriPermission(
+                    uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION
+                )
+            }
+            avatarUri = uri.toString()
+        }
+    }
+    var heightValue by remember(state.settings.heightCm) { mutableFloatStateOf(state.settings.heightCm.toFloat()) }
+    var weightValue by remember(state.settings.weightKg) { mutableFloatStateOf(state.settings.weightKg.toFloat()) }
+    var birthDate by remember(state.settings.birthDate) { mutableStateOf(state.settings.birthDate) }
+    var nicknameEditorOpen by remember { mutableStateOf(false) }
+    var nicknameDraft by remember(displayName) { mutableStateOf(displayName) }
+    var strideValue by remember(state.settings.strideLengthCm) { mutableFloatStateOf(state.settings.strideLengthCm.toFloat()) }
+    var selectedGender by remember(state.settings.gender) { mutableStateOf(state.settings.gender) }
+    var selectedStrideMode by remember(state.settings.strideMode) { mutableStateOf(state.settings.strideMode) }
+    val initialCalibrationKm = ((state.today?.distanceMeters ?: 1450.0) / 1000.0).coerceIn(0.5, 10.0).toFloat()
+    var calibrationKm by remember(state.today?.dailySteps) { mutableFloatStateOf(initialCalibrationKm) }
+    val autoStride = StepMetrics.estimatedStrideCm(
+        heightValue.roundToInt(),
+        selectedGender,
+        ageFromBirthDateForUi(birthDate)
+    )
+    val effectiveStride = if (selectedStrideMode == UserSettingsEntity.STRIDE_MODE_MANUAL) {
+        strideValue.roundToInt()
+    } else {
+        autoStride
+    }
+    val currentSteps = state.today?.dailySteps ?: 0L
+    val previewDistanceKm = currentSteps * effectiveStride / 100000.0
+    val saveProfile = {
+        onUpdateProfile(
+            displayName,
+            avatarUri,
+            heightValue.roundToInt(),
+            weightValue.roundToInt(),
+            birthDate,
+            selectedGender,
+            selectedStrideMode,
+            strideValue.roundToInt()
+        )
+    }
+
+    if (nicknameEditorOpen) {
+        AlertDialog(
+            onDismissRequest = { nicknameEditorOpen = false },
+            title = { Text("修改昵称") },
+            text = {
+                OutlinedTextField(
+                    value = nicknameDraft,
+                    onValueChange = { nicknameDraft = it.take(20) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        displayName = nicknameDraft.trim().ifBlank { UserSettingsEntity().displayName }
+                        nicknameEditorOpen = false
+                    }
+                ) {
+                    Text("确定")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { nicknameEditorOpen = false }) {
+                    Text("取消")
+                }
+            }
+        )
+    }
+
+    ScreenColumn(spacing = 10.dp, horizontalPadding = 18.dp, verticalPadding = 8.dp, scrollResetKey = "profile-editor") {
+        ProfileTopBar(
+            title = "个人资料",
+            onBack = onDone,
+            onSave = {
+                saveProfile()
+                onDone()
+            }
+        )
+
+        ProfileHeroCard(
+            displayName = displayName.ifBlank { UserSettingsEntity().displayName },
+            avatarUri = avatarUri,
+            onPickAvatar = { avatarPicker.launch(arrayOf("image/*")) }
+        )
+
+        ProfileSectionTitle("个人信息")
+        ProfileInfoCard {
+            ProfileInfoRow(
+                icon = Icons.Outlined.Person,
+                label = "头像",
+                onClick = { avatarPicker.launch(arrayOf("image/*")) }
+            ) {
+                AvatarImage(avatarUri, size = 44.dp, cornerRadius = 22.dp)
+                Text("›", color = StepMuted, fontSize = 28.sp)
+            }
+            Divider(color = MaterialTheme.colorScheme.background)
+            ProfileInfoRow(
+                icon = Icons.Outlined.Edit,
+                label = "昵称",
+                onClick = {
+                    nicknameDraft = displayName
+                    nicknameEditorOpen = true
+                }
+            ) {
+                Text(displayName.ifBlank { UserSettingsEntity().displayName }, color = StepMuted, fontSize = 16.sp)
+                Text("›", color = StepMuted, fontSize = 28.sp)
+            }
+            Divider(color = MaterialTheme.colorScheme.background)
+            ProfileInfoRow(icon = Icons.Outlined.Person, label = "性别") {
+                ProfileGenderControl(selectedGender) { selectedGender = it }
+            }
+            Divider(color = MaterialTheme.colorScheme.background)
+            ProfileInfoRow(
+                icon = Icons.Outlined.Timer,
+                label = "生日",
+                onClick = {
+                    showBirthDatePicker(context, birthDate) { picked ->
+                        birthDate = picked
+                    }
+                }
+            ) {
+                Text(birthDate.ifBlank { "1991-01-01" }, color = StepMuted, fontSize = 16.sp)
+                Text("›", color = StepMuted, fontSize = 28.sp)
+            }
+        }
+
+        ProfileSectionTitle("身体数据")
+        BodyDataCard {
+            BodyDataSliderRow(
+                icon = Icons.Outlined.Straighten,
+                label = "身高",
+                value = heightValue,
+                valueText = "${heightValue.roundToInt()} cm",
+                range = 120f..220f,
+                steps = 99,
+                minText = "120",
+                maxText = "220",
+                onValueChange = { heightValue = it }
+            )
+            Divider(color = MaterialTheme.colorScheme.background)
+            BodyDataSliderRow(
+                icon = Icons.Outlined.Settings,
+                label = "体重",
+                value = weightValue,
+                valueText = "${weightValue.roundToInt()} kg",
+                range = 30f..200f,
+                steps = 169,
+                minText = "30",
+                maxText = "200",
+                onValueChange = { weightValue = it }
+            )
+        }
+
+        ProfileNotice("数据仅用于健康管理，不会用于其他用途")
+
+        ProfileSectionTitle("步幅与距离")
+        StrideDistanceCard(
+            selectedStrideMode = selectedStrideMode,
+            onStrideModeChange = { selectedStrideMode = it },
+            effectiveStride = effectiveStride,
+            autoStride = autoStride,
+            previewDistanceKm = previewDistanceKm,
+            strideValue = strideValue,
+            onStrideValueChange = {
+                strideValue = it
+                selectedStrideMode = UserSettingsEntity.STRIDE_MODE_MANUAL
+            },
+            calibrationKm = calibrationKm,
+            onCalibrationChange = { calibrationKm = it },
+            currentSteps = currentSteps,
+            onCalibrateStride = onCalibrateStride
+        )
+    }
+}
+
+@Composable
+private fun ProfileTopBar(title: String, onBack: () -> Unit, onSave: () -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        TextButton(onClick = onBack) {
+            Text("‹ 返回", color = MaterialTheme.colorScheme.onSurface, fontSize = 16.sp)
+        }
+        Text(
+            title,
+            fontSize = 21.sp,
+            fontWeight = FontWeight.Bold,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.weight(1f)
+        )
+        TextButton(onClick = onSave) {
+            Text("保存", color = StepGreen, fontSize = 16.sp)
+        }
+    }
+}
+
+@Composable
+private fun ProfileHeroCard(displayName: String, avatarUri: String?, onPickAvatar: () -> Unit) {
+    ElevatedCard(shape = RoundedCornerShape(18.dp), modifier = Modifier.fillMaxWidth()) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(126.dp)
+                .background(
+                    Brush.linearGradient(
+                        colors = listOf(
+                            StepGreen.copy(alpha = 0.14f),
+                            MaterialTheme.colorScheme.surface,
+                            StepGreen.copy(alpha = 0.10f)
+                        )
+                    )
+                )
+                .padding(horizontal = 22.dp),
+            contentAlignment = Alignment.CenterStart
+        ) {
+            Canvas(Modifier.fillMaxSize()) {
+                val leafColor = StepGreen.copy(alpha = 0.055f)
+                drawCircle(leafColor, radius = 48.dp.toPx(), center = Offset(size.width * 0.92f, size.height * 0.74f))
+                drawCircle(leafColor.copy(alpha = 0.72f), radius = 30.dp.toPx(), center = Offset(size.width * 0.84f, size.height * 0.88f))
+                drawCircle(leafColor.copy(alpha = 0.58f), radius = 24.dp.toPx(), center = Offset(size.width * 0.98f, size.height * 0.48f))
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(modifier = Modifier.size(90.dp), contentAlignment = Alignment.Center) {
+                    AvatarImage(avatarUri, size = 86.dp, cornerRadius = 43.dp)
+                    Surface(
+                        modifier = Modifier
+                            .align(Alignment.BottomEnd)
+                            .size(32.dp)
+                            .clickable { onPickAvatar() },
+                        shape = CircleShape,
+                        color = StepGreen,
+                        contentColor = Color.White
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(Icons.Outlined.PhotoCamera, null, modifier = Modifier.size(18.dp))
+                        }
+                    }
+                }
+                Column(modifier = Modifier.padding(start = 24.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(displayName, fontWeight = FontWeight.Bold, fontSize = 21.sp)
+                        Icon(Icons.Outlined.Edit, null, tint = StepGreen, modifier = Modifier.padding(start = 7.dp).size(18.dp))
+                    }
+                    Text("点击修改头像和昵称", color = StepMuted, fontSize = 13.sp, modifier = Modifier.padding(top = 5.dp))
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ProfileSectionTitle(title: String) {
+    Text(title, fontSize = 18.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(start = 4.dp, top = 2.dp))
+}
+
+@Composable
+private fun ProfileInfoCard(content: @Composable ColumnScope.() -> Unit) {
+    ElevatedCard(shape = RoundedCornerShape(18.dp), modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp), content = content)
+    }
+}
+
+@Composable
+private fun ProfileInfoRow(
+    icon: ImageVector,
+    label: String,
+    onClick: (() -> Unit)? = null,
+    trailing: @Composable () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(50.dp)
+            .clickable(enabled = onClick != null) { onClick?.invoke() },
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        ProfileIconBox(icon)
+        Text(label, fontSize = 16.sp, modifier = Modifier.padding(start = 14.dp))
+        Spacer(Modifier.weight(1f))
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            trailing()
+        }
+    }
+}
+
+@Composable
+private fun ProfileIconBox(icon: ImageVector) {
+    Box(
+        modifier = Modifier
+            .size(38.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .background(StepGreen.copy(alpha = 0.10f)),
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(icon, null, tint = StepGreen, modifier = Modifier.size(22.dp))
+    }
+}
+
+@Composable
+private fun ProfileGenderControl(selected: String, onSelected: (String) -> Unit) {
+    Row(
+        modifier = Modifier
+            .width(192.dp)
+            .height(32.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .background(MaterialTheme.colorScheme.background),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        ProfileGenderSegment("男", UserSettingsEntity.GENDER_MALE, selected, Modifier.weight(1f), onSelected)
+        ProfileGenderSegment("女", UserSettingsEntity.GENDER_FEMALE, selected, Modifier.weight(1f), onSelected)
+        ProfileGenderSegment("未设置", UserSettingsEntity.GENDER_UNSPECIFIED, selected, Modifier.weight(1f), onSelected)
+    }
+}
+
+@Composable
+private fun ProfileGenderSegment(
+    label: String,
+    value: String,
+    selected: String,
+    modifier: Modifier,
+    onSelected: (String) -> Unit
+) {
+    Surface(
+        modifier = modifier.fillMaxHeight().clickable { onSelected(value) },
+        color = if (selected == value) StepGreen else Color.Transparent,
+        contentColor = if (selected == value) Color.White else StepMuted
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            Text(label, fontSize = 14.sp)
+        }
+    }
+}
+
+@Composable
+private fun BodyDataCard(content: @Composable ColumnScope.() -> Unit) {
+    ElevatedCard(shape = RoundedCornerShape(18.dp), modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp), content = content)
+    }
+}
+
+@Composable
+private fun BodyDataSliderRow(
+    icon: ImageVector,
+    label: String,
+    value: Float,
+    valueText: String,
+    range: ClosedFloatingPointRange<Float>,
+    steps: Int,
+    minText: String,
+    maxText: String,
+    onValueChange: (Float) -> Unit
+) {
+    Row(modifier = Modifier.fillMaxWidth().padding(vertical = 5.dp), verticalAlignment = Alignment.CenterVertically) {
+        ProfileIconBox(icon)
+        Column(modifier = Modifier.padding(start = 14.dp).weight(1f)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(label, fontSize = 16.sp, modifier = Modifier.weight(1f))
+                Text(valueText, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
+                Surface(
+                    modifier = Modifier.padding(start = 8.dp).size(30.dp),
+                    shape = RoundedCornerShape(8.dp),
+                    color = MaterialTheme.colorScheme.background,
+                    contentColor = StepMuted
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(Icons.Outlined.Edit, null, modifier = Modifier.size(16.dp))
+                    }
+                }
+            }
+            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text(minText, color = StepMuted, fontSize = 11.sp, modifier = Modifier.width(32.dp))
+                Slider(
+                    value = value,
+                    onValueChange = onValueChange,
+                    valueRange = range,
+                    steps = steps,
+                    modifier = Modifier.weight(1f)
+                )
+                Text(maxText, color = StepMuted, fontSize = 11.sp, textAlign = TextAlign.End, modifier = Modifier.width(34.dp))
+            }
+        }
+    }
+}
+
+@Composable
+private fun ProfileNotice(text: String) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(12.dp),
+        color = StepGreen.copy(alpha = 0.08f),
+        contentColor = StepMuted
+    ) {
+        Row(modifier = Modifier.padding(horizontal = 18.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Outlined.Shield, null, tint = StepGreen, modifier = Modifier.size(18.dp))
+            Text(text, fontSize = 13.sp, modifier = Modifier.padding(start = 10.dp))
+        }
+    }
+}
+
+@Composable
+private fun StrideDistanceCard(
+    selectedStrideMode: String,
+    onStrideModeChange: (String) -> Unit,
+    effectiveStride: Int,
+    autoStride: Int,
+    previewDistanceKm: Double,
+    strideValue: Float,
+    onStrideValueChange: (Float) -> Unit,
+    calibrationKm: Float,
+    onCalibrationChange: (Float) -> Unit,
+    currentSteps: Long,
+    onCalibrateStride: (Double) -> Unit
+) {
+    ElevatedCard(shape = RoundedCornerShape(18.dp), modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            StrideModeControl(selectedStrideMode, onStrideModeChange)
+            Text(
+                "当前使用 $effectiveStride cm · 自动估算 $autoStride cm · 今日约 ${twoDecimal(previewDistanceKm)} km",
+                color = StepMuted,
+                fontSize = 12.sp
+            )
+            ProfileSlider(
+                label = "手动步幅",
+                value = strideValue,
+                valueText = "${strideValue.roundToInt()} cm",
+                range = 45f..120f,
+                steps = 74,
+                onValueChange = onStrideValueChange,
+                onFinished = {}
+            )
+            ProfileSlider(
+                label = "三星健康距离",
+                value = calibrationKm,
+                valueText = "${twoDecimal(calibrationKm.toDouble())} km",
+                range = 0.5f..10f,
+                steps = 94,
+                onValueChange = onCalibrationChange,
+                onFinished = {}
+            )
+            Button(
+                onClick = { onCalibrateStride(calibrationKm.toDouble()) },
+                enabled = currentSteps > 0,
+                colors = ButtonDefaults.buttonColors(containerColor = StepGreen),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("按当前步数校准步幅")
+            }
+        }
+    }
+}
+
+@Composable
+private fun StrideModeControl(selected: String, onSelected: (String) -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(46.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .background(MaterialTheme.colorScheme.background),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        StrideModeSegment("自动", UserSettingsEntity.STRIDE_MODE_AUTO, selected, Modifier.weight(1f), onSelected)
+        StrideModeSegment("手动", UserSettingsEntity.STRIDE_MODE_MANUAL, selected, Modifier.weight(1f), onSelected)
+    }
+}
+
+@Composable
+private fun StrideModeSegment(
+    label: String,
+    value: String,
+    selected: String,
+    modifier: Modifier,
+    onSelected: (String) -> Unit
+) {
+    Surface(
+        modifier = modifier.fillMaxHeight().clickable { onSelected(value) },
+        color = if (selected == value) StepGreen else Color.Transparent,
+        contentColor = if (selected == value) Color.White else StepMuted
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            Text(label, fontSize = 16.sp)
+        }
+    }
+}
+
+@Composable
+private fun AvatarImage(uriString: String?, size: Dp, cornerRadius: Dp) {
+    val context = LocalContext.current
+    val image by produceState<ImageBitmap?>(initialValue = null, uriString) {
+        value = withContext(Dispatchers.IO) {
+            loadImageBitmap(context, uriString)
+        }
+    }
+    Box(
+        modifier = Modifier
+            .size(size)
+            .clip(RoundedCornerShape(cornerRadius))
+            .background(StepGreen.copy(alpha = 0.14f)),
+        contentAlignment = Alignment.Center
+    ) {
+        if (image != null) {
+            Image(
+                bitmap = image!!,
+                contentDescription = "头像",
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop
+            )
+        } else {
+            Icon(Icons.Outlined.Person, null, tint = StepGreen, modifier = Modifier.size(size * 0.52f))
+        }
+    }
+}
+
+private fun loadImageBitmap(context: Context, uriString: String?): ImageBitmap? {
+    if (uriString.isNullOrBlank()) return null
+    return runCatching {
+        val uri = Uri.parse(uriString)
+        val bitmap = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            ImageDecoder.decodeBitmap(ImageDecoder.createSource(context.contentResolver, uri))
+        } else {
+            context.contentResolver.openInputStream(uri).use { input ->
+                BitmapFactory.decodeStream(input)
+            }
+        }
+        bitmap?.asImageBitmap()
+    }.getOrNull()
+}
+
+private fun showBirthDatePicker(context: Context, current: String, onPicked: (String) -> Unit) {
+    val parts = current.split("-").mapNotNull { it.toIntOrNull() }
+    val calendar = Calendar.getInstance()
+    val currentYear = calendar.get(Calendar.YEAR)
+    val year = parts.getOrNull(0)?.coerceIn(currentYear - 100, currentYear - 10) ?: currentYear - 35
+    val month = parts.getOrNull(1)?.coerceIn(1, 12) ?: 1
+    val day = parts.getOrNull(2)?.coerceIn(1, 31) ?: 1
+    DatePickerDialog(
+        context,
+        { _, pickedYear, pickedMonth, pickedDay ->
+            onPicked(String.format(Locale.US, "%04d-%02d-%02d", pickedYear, pickedMonth + 1, pickedDay))
+        },
+        year,
+        month - 1,
+        day
+    ).show()
+}
+
+private fun ageFromBirthDateForUi(birthDate: String): Int {
+    val parts = birthDate.split("-").mapNotNull { it.toIntOrNull() }
+    if (parts.size != 3) return 35
+    val today = Calendar.getInstance()
+    var age = today.get(Calendar.YEAR) - parts[0]
+    val currentMonth = today.get(Calendar.MONTH) + 1
+    val currentDay = today.get(Calendar.DAY_OF_MONTH)
+    if (currentMonth < parts[1] || (currentMonth == parts[1] && currentDay < parts[2])) {
+        age -= 1
+    }
+    return age.coerceIn(10, 100)
 }
 
 @Composable
@@ -514,12 +1164,19 @@ private fun ScreenColumn(
     spacing: androidx.compose.ui.unit.Dp = 14.dp,
     horizontalPadding: androidx.compose.ui.unit.Dp = 18.dp,
     verticalPadding: androidx.compose.ui.unit.Dp = 18.dp,
+    scrollResetKey: Any? = null,
     content: @Composable ColumnScope.() -> Unit
 ) {
+    val scrollState = rememberScrollState()
+    LaunchedEffect(scrollResetKey) {
+        if (scrollResetKey != null) {
+            scrollState.scrollTo(0)
+        }
+    }
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .verticalScroll(rememberScrollState())
+            .verticalScroll(scrollState)
             .padding(horizontal = horizontalPadding, vertical = verticalPadding),
         verticalArrangement = Arrangement.spacedBy(spacing),
         content = content
@@ -549,6 +1206,14 @@ private fun RealtimeChip(enabled: Boolean) {
 private fun StatusPill(text: String) {
     Surface(shape = CircleShape, color = StepGreen.copy(alpha = 0.12f), contentColor = StepGreen) {
         Text(text, fontSize = 11.sp, modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp))
+    }
+}
+
+@Composable
+private fun ProfileSummaryMetric(label: String, value: String, modifier: Modifier = Modifier) {
+    Column(modifier = modifier, horizontalAlignment = Alignment.Start) {
+        Text(label, color = StepMuted, fontSize = 11.sp)
+        Text(value, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
     }
 }
 
@@ -608,7 +1273,29 @@ private fun MetricCard(icon: ImageVector, label: String, value: String, tint: Co
 @Composable
 private fun HourChart(samples: List<SensorSampleEntity>, totalSteps: Long, modifier: Modifier = Modifier, height: androidx.compose.ui.unit.Dp = 150.dp) {
     val bars = remember(samples, totalSteps) { hourlyBars(samples, totalSteps) }
-    BarRow(bars = bars, highlightLast = true, modifier = modifier.height(height))
+    var selectedHour by remember(samples, totalSteps) { mutableStateOf<Int?>(null) }
+    val currentHour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY).coerceIn(0, 23)
+    Column(modifier = modifier) {
+        BarRow(
+            bars = bars,
+            highlightLast = false,
+            highlightIndex = currentHour,
+            selectedIndex = selectedHour,
+            onBarClick = { hour -> selectedHour = if (selectedHour == hour) null else hour },
+            modifier = Modifier.height(height)
+        )
+        val selected = selectedHour
+        Text(
+            text = if (selected != null) {
+                "${hourRangeLabel(selected)} · ${number(bars[selected].roundToInt())} 步"
+            } else {
+                "点击柱子查看时间段步数"
+            },
+            color = StepMuted,
+            fontSize = 12.sp,
+            modifier = Modifier.padding(top = 6.dp)
+        )
+    }
 }
 
 @Composable
@@ -624,7 +1311,14 @@ private fun WeekChart(days: List<WeekDay>, modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun BarRow(bars: List<Float>, highlightLast: Boolean, modifier: Modifier = Modifier) {
+private fun BarRow(
+    bars: List<Float>,
+    highlightLast: Boolean,
+    modifier: Modifier = Modifier,
+    highlightIndex: Int? = if (highlightLast) bars.lastIndex else null,
+    selectedIndex: Int? = null,
+    onBarClick: ((Int) -> Unit)? = null
+) {
     val maxValue = max(1f, bars.maxOrNull() ?: 0f)
     Row(
         modifier = modifier.fillMaxWidth(),
@@ -633,17 +1327,22 @@ private fun BarRow(bars: List<Float>, highlightLast: Boolean, modifier: Modifier
     ) {
         bars.forEachIndexed { index, value ->
             val fraction = (value / maxValue).coerceIn(0f, 1f)
-            val color = if (highlightLast && index == bars.lastIndex) StepOrange else StepGreen
+            val color = when (index) {
+                selectedIndex -> StepOrange
+                highlightIndex -> StepOrange
+                else -> StepGreen
+            }
             Box(
                 modifier = Modifier
                     .weight(1f)
-                    .height(138.dp),
+                    .fillMaxHeight()
+                    .clickable(enabled = onBarClick != null) { onBarClick?.invoke(index) },
                 contentAlignment = Alignment.BottomCenter
             ) {
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height((18 + 120 * fraction).dp)
+                        .fillMaxHeight((0.12f + 0.88f * fraction).coerceIn(0.08f, 1f))
                         .clip(RoundedCornerShape(topStart = 4.dp, topEnd = 4.dp))
                         .background(color)
                 )
@@ -689,12 +1388,217 @@ private fun SegmentedHeader(selected: StatsPeriod, onSelected: (StatsPeriod) -> 
 }
 
 @Composable
-private fun SummaryCard(title: String, value: String, subtitle: String, tint: Color, modifier: Modifier = Modifier) {
+private fun StatChartCard(title: String, subtitle: String, content: @Composable ColumnScope.() -> Unit) {
+    ElevatedCard(shape = RoundedCornerShape(14.dp), modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(title, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                    Text(subtitle, color = StepMuted, fontSize = 12.sp, modifier = Modifier.padding(top = 3.dp))
+                }
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = StepGreen.copy(alpha = 0.10f),
+                    contentColor = StepGreen,
+                    modifier = Modifier.size(42.dp)
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(Icons.Outlined.BarChart, null, modifier = Modifier.size(24.dp))
+                    }
+                }
+            }
+            content()
+        }
+    }
+}
+
+@Composable
+private fun LabeledBarChart(
+    bars: List<Float>,
+    labels: List<String>,
+    highlightIndex: Int,
+    modifier: Modifier = Modifier,
+    labelEveryBar: Boolean = true
+) {
+    Column(modifier = modifier.fillMaxWidth()) {
+        Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+            Canvas(Modifier.fillMaxSize()) {
+                val gridColor = StepMuted.copy(alpha = 0.18f)
+                repeat(4) { index ->
+                    val y = size.height * index / 3f
+                    drawLine(gridColor, Offset(0f, y), Offset(size.width, y), strokeWidth = 1.dp.toPx())
+                }
+            }
+            BarRow(
+                bars = bars,
+                highlightLast = false,
+                highlightIndex = highlightIndex,
+                modifier = Modifier.fillMaxSize().padding(top = 6.dp)
+            )
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            labels.forEach { label ->
+                Text(
+                    label,
+                    color = StepMuted,
+                    fontSize = if (labelEveryBar) 11.sp else 9.sp,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.weight(1f)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun SummaryCard(title: String, value: String, subtitle: String, tint: Color, modifier: Modifier = Modifier, compact: Boolean = false) {
     ElevatedCard(shape = RoundedCornerShape(8.dp), modifier = modifier) {
-        Column(modifier = Modifier.padding(14.dp)) {
-            Text(value, color = tint, fontWeight = FontWeight.Bold, fontSize = 20.sp)
-            Text(title, fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
-            Text(subtitle, color = StepMuted, fontSize = 10.sp)
+        Column(modifier = Modifier.padding(if (compact) 12.dp else 14.dp)) {
+            Text(value, color = tint, fontWeight = FontWeight.Bold, fontSize = if (compact) 18.sp else 20.sp)
+            Text(title, fontWeight = FontWeight.SemiBold, fontSize = 12.sp, modifier = Modifier.padding(top = 2.dp))
+            Text(subtitle, color = StepMuted, fontSize = 10.sp, modifier = Modifier.padding(top = 4.dp))
+        }
+    }
+}
+
+@Composable
+private fun CompactWidgetRow(
+    iconLabel: String,
+    title: String,
+    subtitle: String,
+    tall: Boolean = false,
+    preview: @Composable () -> Unit
+) {
+    ElevatedCard(shape = RoundedCornerShape(14.dp), modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(if (tall) 98.dp else 64.dp)
+                .padding(horizontal = 12.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            WidgetTypeBadge(iconLabel)
+            Column(modifier = Modifier.padding(start = 12.dp).width(104.dp), verticalArrangement = Arrangement.Center) {
+                Text(iconLabel, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                Text(title, fontWeight = FontWeight.SemiBold, fontSize = 14.sp, modifier = Modifier.padding(top = 1.dp))
+                if (tall) {
+                    Text(subtitle, color = StepMuted, fontSize = 10.sp, modifier = Modifier.padding(top = 1.dp))
+                }
+            }
+            Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.CenterEnd) {
+                preview()
+            }
+        }
+    }
+}
+
+@Composable
+private fun WidgetTypeBadge(label: String) {
+    Box(
+        modifier = Modifier
+            .size(42.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(StepGreen.copy(alpha = 0.10f)),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(label, color = StepGreen, fontWeight = FontWeight.Bold, fontSize = 12.sp, textAlign = TextAlign.Center)
+    }
+}
+
+@Composable
+private fun CompactWidgetSmallPreview(steps: Long) {
+    Surface(shape = RoundedCornerShape(10.dp), color = MaterialTheme.colorScheme.background, modifier = Modifier.width(82.dp).height(48.dp)) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+            Text("今日", color = StepMuted, fontSize = 11.sp)
+            Text(number(steps), color = StepGreen, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+        }
+    }
+}
+
+@Composable
+private fun CompactWidgetProgressPreview(steps: Long, percent: Int) {
+    Surface(shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.background, modifier = Modifier.fillMaxWidth().height(48.dp)) {
+        Row(modifier = Modifier.padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(number(steps), fontWeight = FontWeight.Bold, fontSize = 18.sp)
+            Spacer(Modifier.width(12.dp))
+            LinearProgressIndicator(progress = (percent / 100f).coerceIn(0f, 1f), modifier = Modifier.weight(1f), color = StepGreen)
+            Spacer(Modifier.width(8.dp))
+            Text("${percent.coerceIn(0, 999)}%", color = StepGreen, fontSize = 12.sp)
+        }
+    }
+}
+
+@Composable
+private fun CompactWidgetSquarePreview(steps: Long, percent: Int) {
+    Surface(shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.background, modifier = Modifier.width(122.dp).height(50.dp)) {
+        Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)) {
+            Text("步数", color = StepMuted, fontSize = 10.sp)
+            Text(number(steps), fontWeight = FontWeight.Bold, fontSize = 16.sp)
+            LinearProgressIndicator(progress = (percent / 100f).coerceIn(0f, 1f), modifier = Modifier.fillMaxWidth(), color = StepGreen)
+        }
+    }
+}
+
+@Composable
+private fun CompactWidgetWidePreview(steps: Long, goal: Int, percent: Int) {
+    Surface(shape = RoundedCornerShape(24.dp), color = MaterialTheme.colorScheme.background, modifier = Modifier.fillMaxWidth().height(48.dp)) {
+        Row(modifier = Modifier.padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Box(modifier = Modifier.size(30.dp).clip(CircleShape).background(StepGreen), contentAlignment = Alignment.Center) {
+                Icon(Icons.Outlined.DirectionsWalk, null, tint = Color.White, modifier = Modifier.size(18.dp))
+            }
+            Text(number(steps), fontWeight = FontWeight.Bold, fontSize = 17.sp, modifier = Modifier.padding(start = 8.dp))
+            Spacer(Modifier.weight(1f))
+            Column(horizontalAlignment = Alignment.End, modifier = Modifier.width(116.dp)) {
+                Text("目标 ${number(goal)}", color = StepMuted, fontSize = 9.sp, maxLines = 1)
+                LinearProgressIndicator(progress = (percent / 100f).coerceIn(0f, 1f), modifier = Modifier.fillMaxWidth(), color = StepGreen)
+            }
+        }
+    }
+}
+
+@Composable
+private fun CompactWidgetWeekPreview(days: List<WeekDay>) {
+    Surface(shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.background, modifier = Modifier.fillMaxWidth().height(58.dp)) {
+        Row(
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.Bottom,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            val maxSteps = max(1L, days.maxOfOrNull { it.steps } ?: 0L)
+            days.forEachIndexed { index, day ->
+                Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.weight(1f)) {
+                    Box(
+                        modifier = Modifier
+                            .width(18.dp)
+                            .height((12 + 28 * (day.steps.toFloat() / maxSteps)).dp)
+                            .clip(RoundedCornerShape(topStart = 4.dp, topEnd = 4.dp))
+                            .background(if (index == days.lastIndex) StepOrange else StepGreen)
+                    )
+                    Text(day.label.takeLast(1), color = StepMuted, fontSize = 9.sp)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun CompactActivityPreview(steps: Long, distanceKm: Double, minutes: Int, calories: Int) {
+    Surface(shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.background, modifier = Modifier.fillMaxWidth().height(78.dp)) {
+        Row(modifier = Modifier.padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Canvas(Modifier.size(46.dp)) {
+                drawCircle(StepGreen.copy(alpha = 0.18f))
+                drawCircle(StepBlue.copy(alpha = 0.18f), radius = size.minDimension * 0.34f)
+                drawCircle(Color(0xFF9D6AE8).copy(alpha = 0.30f), radius = size.minDimension * 0.22f)
+            }
+            Column(modifier = Modifier.padding(start = 10.dp), verticalArrangement = Arrangement.spacedBy(0.dp)) {
+                Text("步  ${number(steps)}/10k", fontWeight = FontWeight.SemiBold, fontSize = 10.sp, maxLines = 1)
+                Text("距  ${oneDecimal(distanceKm)} km", fontWeight = FontWeight.SemiBold, fontSize = 10.sp, maxLines = 1)
+                Text("时  $minutes/90 分", fontWeight = FontWeight.SemiBold, fontSize = 10.sp, maxLines = 1)
+                Text("卡  $calories/500", fontWeight = FontWeight.SemiBold, fontSize = 10.sp, maxLines = 1)
+            }
         }
     }
 }
@@ -814,6 +1718,41 @@ private fun SettingsSection(title: String, content: @Composable ColumnScope.() -
             content()
         }
     }
+}
+
+@Composable
+private fun AboutRow(label: String, value: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(label, color = StepMuted, fontSize = 14.sp)
+        Text(value, fontWeight = FontWeight.Medium, fontSize = 14.sp)
+    }
+}
+
+@Composable
+private fun ProfileSlider(
+    label: String,
+    value: Float,
+    valueText: String,
+    range: ClosedFloatingPointRange<Float>,
+    steps: Int,
+    onValueChange: (Float) -> Unit,
+    onFinished: () -> Unit
+) {
+    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+        Text(label, fontWeight = FontWeight.SemiBold)
+        Text(valueText, color = StepMuted, fontSize = 12.sp)
+    }
+    Slider(
+        value = value,
+        onValueChange = onValueChange,
+        valueRange = range,
+        steps = steps,
+        onValueChangeFinished = onFinished
+    )
 }
 
 @Composable
@@ -988,11 +1927,27 @@ private fun hourlyBars(samples: List<SensorSampleEntity>, totalSteps: Long): Lis
     return bars
 }
 
+private fun hourRangeLabel(hour: Int): String =
+    String.format(Locale.getDefault(), "%02d:00-%02d:00", hour.coerceIn(0, 23), (hour + 1).coerceAtMost(24))
+
+private fun genderLabel(gender: String): String = when (gender) {
+    UserSettingsEntity.GENDER_MALE -> "男性"
+    UserSettingsEntity.GENDER_FEMALE -> "女性"
+    else -> "未设置"
+}
+
+private fun strideModeLabel(mode: String): String = when (mode) {
+    UserSettingsEntity.STRIDE_MODE_MANUAL -> "手动校准"
+    else -> "自动估算"
+}
+
 private fun number(value: Long): String = NumberFormat.getIntegerInstance(Locale.getDefault()).format(value)
 
 private fun number(value: Int): String = NumberFormat.getIntegerInstance(Locale.getDefault()).format(value)
 
 private fun oneDecimal(value: Double): String = String.format(Locale.getDefault(), "%.2f", value)
+
+private fun twoDecimal(value: Double): String = String.format(Locale.getDefault(), "%.2f", value)
 
 private fun todayLabel(): String = SimpleDateFormat("M月d日 E", Locale.CHINA).format(Date())
 

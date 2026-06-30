@@ -77,6 +77,8 @@ class MainActivity : ComponentActivity() {
                     },
                     onRefresh = { viewModel.refreshFromSensor(showMessage = true) },
                     onSetGoal = viewModel::setGoal,
+                    onUpdateProfile = viewModel::updateProfile,
+                    onCalibrateStride = viewModel::calibrateStride,
                     onSetTheme = viewModel::setTheme,
                     onToggleRealtime = { enabled ->
                         if (enabled &&

@@ -135,6 +135,31 @@ class PedometerViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
+    fun updateProfile(
+        displayName: String,
+        avatarUri: String?,
+        heightCm: Int,
+        weightKg: Int,
+        birthDate: String,
+        gender: String,
+        strideMode: String,
+        strideLengthCm: Int
+    ) {
+        viewModelScope.launch {
+            repository.updateProfile(displayName, avatarUri, heightCm, weightKg, birthDate, gender, strideMode, strideLengthCm)
+            StepWidgetUpdater.updateAllNow(appContext)
+            message.value = "个人资料已更新"
+        }
+    }
+
+    fun calibrateStride(distanceKm: Double) {
+        viewModelScope.launch {
+            val settings = repository.calibrateStrideFromDistance(distanceKm)
+            StepWidgetUpdater.updateAllNow(appContext)
+            message.value = "步幅已校准为 ${settings.strideLengthCm} cm"
+        }
+    }
+
     fun setTheme(themeMode: String) {
         viewModelScope.launch {
             repository.updateTheme(themeMode)
